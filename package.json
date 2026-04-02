@@ -1,0 +1,14 @@
+{
+  "name": "mac-bash-proxy-tunnel",
+  "version": "1.0.0",
+  "description": "Encrypted TCP/UDP relay tunnel with local proxy client",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "service": "node src/service.js",
+    "client": "node src/client.js"
+  }
+}
