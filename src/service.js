@@ -23,6 +23,8 @@ if (args['save-pubkey']) {
 }
 
 const server = net.createServer((socket) => {
+  const peer = `${socket.remoteAddress || 'unknown'}:${socket.remotePort || 0}`;
+  console.log(`[service] client connected: ${peer}`);
   let sessionKey = null;
   const tokenManager = new TokenManager();
   const tcpStreams = new Map();
@@ -39,7 +41,9 @@ const server = net.createServer((socket) => {
         sessionKey = rsaDecryptSessionKey(encrypted, privateKey);
         const msg = { type: 'auth_ok' };
         socket.write(encodeFrame(msg));
+        console.log(`[service] handshake ok: ${peer}`);
       } catch {
+        console.error(`[service] handshake failed: ${peer}`);
         socket.end();
       }
       return;
@@ -49,6 +53,7 @@ const server = net.createServer((socket) => {
     try {
       inner = decryptPacket(frame, sessionKey);
     } catch {
+      console.error(`[service] decrypt failed, closing: ${peer}`);
       socket.end();
       return;
     }
@@ -72,6 +77,7 @@ const server = net.createServer((socket) => {
 
   function handleMessage(msg) {
     if (msg.type === 'token_request') {
+      console.log(`[service] token requested: ${peer}`);
       sendSecure({ type: 'token', token: tokenManager.token });
       return;
     }
@@ -84,6 +90,7 @@ const server = net.createServer((socket) => {
     if (!validateTokenOrNotify(msg)) return;
 
     if (msg.type === 'open_tcp') {
+      console.log(`[service] open_tcp stream#${msg.streamId} -> ${msg.host}:${msg.port} (${peer})`);
       const remote = net.connect(msg.port, msg.host);
       tcpStreams.set(msg.streamId, remote);
       remote.once('connect', () => sendSecure({ type: 'open_tcp_result', streamId: msg.streamId, ok: true }));
@@ -91,8 +98,14 @@ const server = net.createServer((socket) => {
         sendSecure({ type: 'tcp_data', streamId: msg.streamId, data: chunk.toString('base64') });
       });
       remote.on('end', () => sendSecure({ type: 'tcp_end', streamId: msg.streamId }));
-      remote.on('error', (err) => sendSecure({ type: 'tcp_error', streamId: msg.streamId, error: err.message }));
-      remote.on('close', () => tcpStreams.delete(msg.streamId));
+      remote.on('error', (err) => {
+        console.error(`[service] tcp stream#${msg.streamId} remote error:`, err.message);
+        sendSecure({ type: 'tcp_error', streamId: msg.streamId, error: err.message });
+      });
+      remote.on('close', () => {
+        tcpStreams.delete(msg.streamId);
+        console.log(`[service] tcp stream#${msg.streamId} closed`);
+      });
       return;
     }
 
@@ -132,7 +145,11 @@ const server = net.createServer((socket) => {
   }
 
   socket.on('data', decoder);
+  socket.on('error', (err) => {
+    console.error(`[service] client socket error (${peer}):`, err.message);
+  });
   socket.on('close', () => {
+    console.log(`[service] client disconnected: ${peer}`);
     for (const s of tcpStreams.values()) s.destroy();
     for (const s of udpSockets.values()) s.close();
     tcpStreams.clear();
