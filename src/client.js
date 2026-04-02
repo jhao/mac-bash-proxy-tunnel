@@ -80,7 +80,10 @@ class TunnelClient {
   }
 
   sendSecure(message, includeToken = true) {
-    if (!this.socket || this.socket.destroyed || !this.connected) {
+    if (!this.socket || this.socket.destroyed) {
+      throw new Error('Tunnel socket is not connected');
+    }
+    if (includeToken && !this.connected) {
       throw new Error('Tunnel socket is not connected');
     }
     const payload = includeToken ? { ...message, token: this.token } : message;
