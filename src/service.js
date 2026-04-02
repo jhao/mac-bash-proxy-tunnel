@@ -23,6 +23,9 @@ if (args['save-pubkey']) {
 }
 
 const server = net.createServer((socket) => {
+  const clientAddress = `${socket.remoteAddress || 'unknown'}:${socket.remotePort || 'unknown'}`;
+  console.log(`[service] client connected: ${clientAddress}`);
+
   let sessionKey = null;
   const tokenManager = new TokenManager();
   const tcpStreams = new Map();
@@ -31,6 +34,7 @@ const server = net.createServer((socket) => {
   const decoder = createFrameDecoder((frame) => {
     if (!sessionKey) {
       if (frame.type !== 'auth_init') {
+        console.error(`[service] invalid pre-auth frame from ${clientAddress}:`, frame.type);
         socket.end();
         return;
       }
@@ -39,7 +43,9 @@ const server = net.createServer((socket) => {
         sessionKey = rsaDecryptSessionKey(encrypted, privateKey);
         const msg = { type: 'auth_ok' };
         socket.write(encodeFrame(msg));
+        console.log(`[service] auth success: ${clientAddress}`);
       } catch {
+        console.error(`[service] auth failed: ${clientAddress}`);
         socket.end();
       }
       return;
@@ -49,6 +55,7 @@ const server = net.createServer((socket) => {
     try {
       inner = decryptPacket(frame, sessionKey);
     } catch {
+      console.error(`[service] decrypt failed, closing client: ${clientAddress}`);
       socket.end();
       return;
     }
@@ -84,6 +91,7 @@ const server = net.createServer((socket) => {
     if (!validateTokenOrNotify(msg)) return;
 
     if (msg.type === 'open_tcp') {
+      console.log(`[service] open_tcp stream=${msg.streamId} target=${msg.host}:${msg.port} client=${clientAddress}`);
       const remote = net.connect(msg.port, msg.host);
       tcpStreams.set(msg.streamId, remote);
       remote.once('connect', () => sendSecure({ type: 'open_tcp_result', streamId: msg.streamId, ok: true }));
@@ -91,7 +99,10 @@ const server = net.createServer((socket) => {
         sendSecure({ type: 'tcp_data', streamId: msg.streamId, data: chunk.toString('base64') });
       });
       remote.on('end', () => sendSecure({ type: 'tcp_end', streamId: msg.streamId }));
-      remote.on('error', (err) => sendSecure({ type: 'tcp_error', streamId: msg.streamId, error: err.message }));
+      remote.on('error', (err) => {
+        console.error(`[service] tcp stream error stream=${msg.streamId} client=${clientAddress}: ${err.message}`);
+        sendSecure({ type: 'tcp_error', streamId: msg.streamId, error: err.message });
+      });
       remote.on('close', () => tcpStreams.delete(msg.streamId));
       return;
     }
@@ -122,17 +133,28 @@ const server = net.createServer((socket) => {
             data: data.toString('base64')
           });
         });
+        udp.on('error', (err) => {
+          console.error(`[service] udp stream error stream=${msg.streamId} client=${clientAddress}: ${err.message}`);
+          sendSecure({ type: 'udp_error', streamId: msg.streamId, error: err.message });
+        });
         udpSockets.set(key, udp);
       }
       udp.send(Buffer.from(msg.data, 'base64'), msg.targetPort, msg.targetHost, (err) => {
-        if (err) sendSecure({ type: 'udp_error', streamId: msg.streamId, error: err.message });
+        if (err) {
+          console.error(`[service] udp send error stream=${msg.streamId} client=${clientAddress}: ${err.message}`);
+          sendSecure({ type: 'udp_error', streamId: msg.streamId, error: err.message });
+        }
       });
       return;
     }
   }
 
   socket.on('data', decoder);
+  socket.on('error', (err) => {
+    console.error(`[service] socket error client=${clientAddress}: ${err.message}`);
+  });
   socket.on('close', () => {
+    console.log(`[service] client disconnected: ${clientAddress}`);
     for (const s of tcpStreams.values()) s.destroy();
     for (const s of udpSockets.values()) s.close();
     tcpStreams.clear();

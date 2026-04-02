@@ -12,6 +12,7 @@
 - 客户端首次连接时获取 token；服务端随机每 5/10/15 分钟轮换 token。
 - 当 token 失效时，服务端返回 `token_invalid` 与新 token，客户端自动更新并继续后续请求。
 - 客户端在发送后等待响应超过 90 秒会主动进行健康检查；连续 10 次仍无有效响应则终止等待并返回错误。
+- service 端会记录客户端连接、鉴权成功/失败、转发错误和断开连接等日志，便于排障。
 
 ## 安装
 
@@ -30,6 +31,28 @@ npm run service -- --port 7000 --save-pubkey ./pub.key
 - `--save-pubkey`：将公钥写入文件，便于 client 使用
 
 > 注意：`npm run` 传参需要 `--`，例如 `npm run service -- --port 7000`
+
+### 在 Docker 中运行 service
+
+构建镜像：
+
+```bash
+docker build -t mac-bash-proxy-service .
+```
+
+运行容器（映射 7000 端口）：
+
+```bash
+docker run --rm -p 7000:7000 mac-bash-proxy-service
+```
+
+如果你希望把公钥保存到宿主机文件，可挂载卷并覆盖启动命令：
+
+```bash
+docker run --rm -p 7000:7000 -v "$(pwd):/data" \
+  mac-bash-proxy-service \
+  node src/service.js --port 7000 --save-pubkey /data/pub.key
+```
 
 ## 启动 client
 
