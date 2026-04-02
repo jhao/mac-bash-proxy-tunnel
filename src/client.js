@@ -22,6 +22,7 @@ class TunnelClient {
     this.streams = new Map();
     this.pendingOpen = new Map();
     this.pendingPings = new Map();
+    this.closed = false;
   }
 
   async connect() {
@@ -45,7 +46,10 @@ class TunnelClient {
 
     this.socket.on('data', decoder);
     this.socket.on('error', (err) => console.error('[client] tunnel error:', err.message));
-    this.socket.on('close', () => console.error('[client] tunnel closed'));
+    this.socket.on('close', () => {
+      this.closed = true;
+      console.error('[client] tunnel closed');
+    });
 
     await this.waitForToken();
     console.log('[client] handshake complete, token acquired');
@@ -67,6 +71,7 @@ class TunnelClient {
   }
 
   sendSecure(message, includeToken = true) {
+    if (this.closed || !this.socket || this.socket.destroyed) return;
     const payload = includeToken ? { ...message, token: this.token } : message;
     const packet = encryptPacket(payload, this.sessionKey);
     this.socket.write(encodeFrame(packet));
@@ -154,6 +159,7 @@ class TunnelClient {
 
     const state = new StreamState(streamId, localSocket, this);
     this.streams.set(streamId, state);
+    console.log(`[client] stream#${streamId} open ${host}:${targetPort}`);
 
     if (initialData?.length) {
       this.sendTcpData(streamId, initialData);
@@ -173,6 +179,15 @@ class TunnelClient {
     localSocket.on('close', () => {
       this.sendSecure({ type: 'tcp_end', streamId });
       this.streams.delete(streamId);
+      state.dispose();
+      console.log(`[client] stream#${streamId} closed`);
+    });
+
+    localSocket.on('error', (err) => {
+      console.error(`[client] stream#${streamId} local socket error:`, err.message);
+      this.sendSecure({ type: 'tcp_end', streamId });
+      this.streams.delete(streamId);
+      state.dispose();
     });
   }
 
@@ -205,16 +220,20 @@ class StreamState {
     this.timer = null;
   }
 
+  dispose() {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+  }
+
   startWatchdog() {
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(async () => {
+      if (!this.tunnel.streams.has(this.streamId)) return;
       const ok = await this.tunnel.pingHealth();
       if (!ok) {
         this.failedChecks += 1;
       }
-      if (ok) {
-        this.failedChecks += 1;
-      }
+      if (ok) this.failedChecks = 0;
 
       if (this.failedChecks >= 10) {
         this.local.destroy(new Error('Remote response timeout after health checks'));
@@ -284,6 +303,15 @@ async function main() {
   await tunnel.connect();
 
   const proxyServer = net.createServer((socket) => {
+    const peer = `${socket.remoteAddress || 'unknown'}:${socket.remotePort || 0}`;
+    console.log(`[client] inbound proxy connection from ${peer}`);
+    socket.on('error', (err) => {
+      console.error(`[client] inbound socket error (${peer}):`, err.message);
+    });
+    socket.on('close', () => {
+      console.log(`[client] inbound proxy connection closed ${peer}`);
+    });
+
     socket.once('data', async (chunk) => {
       try {
         if (chunk[0] === 0x05) {
@@ -317,6 +345,10 @@ async function main() {
         socket.destroy(err);
       }
     });
+  });
+
+  proxyServer.on('error', (err) => {
+    console.error('[client] local proxy server error:', err.message);
   });
 
   proxyServer.listen(localPort, '127.0.0.1', () => {

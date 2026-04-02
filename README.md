@@ -31,6 +31,15 @@ npm run service -- --port 7000 --save-pubkey ./pub.key
 
 > 注意：`npm run` 传参需要 `--`，例如 `npm run service -- --port 7000`
 
+### 使用 Docker 运行 service
+
+```bash
+docker build -t mac-bash-proxy-tunnel-service .
+docker run --rm -p 7000:7000 -e PORT=7000 mac-bash-proxy-tunnel-service
+```
+
+容器内会直接启动 `src/service.js`，并监听 `0.0.0.0:${PORT}`（默认 `7000`）。
+
 ## 启动 client
 
 ```bash
@@ -56,6 +65,7 @@ export all_proxy=socks5://127.0.0.1:8890
 - 本项目要求 Node.js 20+。
 - 目前 SOCKS5 支持 CONNECT，不支持 IPv6 与 UDP ASSOC。
 - UDP 转发能力在 service 侧已提供协议处理接口（`udp_request` / `udp_response`）。
+- client 与 service 都增加了连接/断开/错误日志，便于定位链路异常（例如 ECONNRESET）。
 
 ## License
 
